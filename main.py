@@ -2,8 +2,11 @@ import sys
 from itertools import combinations
 from typing import List
 
+import numpy as np
 import spacy
-from spacy.tokens import Token
+from spacy.language import Language
+from spacy.pipeline import Tagger
+from spacy.tokens import Doc, Token
 
 from setup import *
 
@@ -29,7 +32,30 @@ def is_match(m, m_prime, cat_m):
 
 # Searching
 
+# Doc.set_extension('phonemes', default=None)
 Token.set_extension('phoneme', getter=lambda t: get_phoneme(t.text))
+
+Doc.set_extension('tag_scores', default=None)
+Token.set_extension('tag_scores', getter=lambda token: token.doc.tag_scores[token.i])
+
+
+# https://github.com/explosion/spaCy/issues/2087
+class ProbabilityTagger(Tagger):
+    def predict(self, docs):
+        tokvecs = self.model.tok2vec(docs)
+        scores = self.model.softmax(tokvecs)
+        guesses = []
+        for i, doc_scores in enumerate(scores):
+            docs[i]._.tag_scores = doc_scores
+            doc_guesses = doc_scores.argmax(axis=1)
+
+            if not isinstance(doc_guesses, np.ndarray):
+                doc_guesses = doc_guesses.get()
+            guesses.append(doc_guesses)
+        return guesses, tokvecs
+
+
+Language.factories['tagger'] = lambda nlp, **cfg: ProbabilityTagger(nlp.vocab, **cfg)
 
 
 def get_permutations(phonemes: List[str]) -> List[str]:
@@ -49,12 +75,19 @@ def get_permutations(phonemes: List[str]) -> List[str]:
                     yield (i1, p1_prime), (i2, p2_prime)
 
 
+def get_log_prob(sentence: str) -> float:
+    doc = nlp(sentence)
+    scores = doc._.tag_scores
+    return scores.max(axis=1).prod()
+
+
 def search(sentence):
-    doc = NLP(sentence)
+    doc = nlp(sentence)
     # for token in doc:
     #     print(token.text, token.lemma_, token.pos_, token.tag_, token.dep_,
     #     token.shape_, token.is_alpha, token.is_stop, token._.phoneme)
 
+    # phonemes = doc._.phonemes
     phonemes = [t._.phoneme for t in doc]
     words = [t.text for t in doc]
 
@@ -81,19 +114,20 @@ def search(sentence):
                             new_words[words.index(m)] = m_prime
                             new_words[words.index(n)] = n_prime
                             freq = 0.5 * (get_word_freq(m_prime, cat_m) + get_word_freq(n_prime, cat_n))
-                            yield ' '.join(new_words), freq
+                            new_sentence = ' '.join(new_words)
+                            yield new_sentence, get_log_prob(new_sentence)
                         else:
                             pass
 
 
 if __name__ == '__main__':
-    NLP = spacy.load(SPACY_FILE)
-    print(f"Loaded language package ({len(NLP.vocab)} words)")
+    nlp = spacy.load(SPACY_FILE)
+    print(f"Loaded language package ({len(nlp.vocab)} words)")
     setup()
     for sentence in sys.argv[1:]:
         print(sentence)
-        out = list(
-            set(search(sentence)))  # Remove duplicates (should only be necessary with current implementation)
+
+        out = list(set(search(sentence)))  # Remove duplicates (should only be necessary with current implementation)
         out.sort(key=lambda t: t[1], reverse=True)
         for o in out:
             print(f"{o[0]}\t\t{o[1]}")
