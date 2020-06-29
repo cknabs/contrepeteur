@@ -1,3 +1,4 @@
+import functools
 import sys
 from collections import defaultdict
 from itertools import combinations
@@ -11,6 +12,9 @@ from spacy.tokens import Doc, Token
 
 from setup import get_phoneme, get_tags, phoneme2words, SPACY_FILE, setup
 
+DEBUG = False
+MAX_PERMUTATION_LENGTH = 3
+
 
 # Helper
 def sub(lst: List, start: int, length=None) -> List:
@@ -22,8 +26,6 @@ def sub(lst: List, start: int, length=None) -> List:
         return lst[0:0]
 
 
-DEBUG = False
-
 # Searching
 
 Token.set_extension('phoneme', getter=lambda t: get_phoneme(t.text))
@@ -31,6 +33,8 @@ Token.set_extension('phoneme', getter=lambda t: get_phoneme(t.text))
 Doc.set_extension('tag_scores', default=None)
 Token.set_extension('tag_scores', getter=lambda token: token.doc.tag_scores[token.i])
 
+
+# TODO: use something like https://github.com/explosion/spaCy/issues/5399 to have a tokenizer for strings and lists of strings
 
 # https://github.com/explosion/spaCy/issues/2087
 class ProbabilityTagger(Tagger):
@@ -53,19 +57,18 @@ Language.factories['tagger'] = lambda nlp, **cfg: ProbabilityTagger(nlp.vocab, *
 
 def get_permutations(phonemes: List[str]) -> List[str]:
     for (i1, p1), (i2, p2) in combinations(enumerate(phonemes), 2):
-        min_len = min(len(p1), len(p2))
-        for length in range(1, min(3, min_len)):
-            for i in range(len(p1) - length + 1):
-                for j in range(len(p2) - length + 1):
-                    x = sub(p1, i, length)
-                    y = sub(p2, j, length)
-
-                    p1_prime = sub(p1, 0, i) + y + sub(p1, i + length)
-                    p2_prime = sub(p2, 0, j) + x + sub(p2, j + length)
-                    phonemes_prime = phonemes.copy()
-                    phonemes_prime[i1] = p1_prime
-                    phonemes_prime[i2] = p2_prime
-                    yield (i1, p1_prime), (i2, p2_prime)
+        for length1 in range(min(MAX_PERMUTATION_LENGTH, 1 + len(p1))):
+            for length2 in range(min(MAX_PERMUTATION_LENGTH, 1 + len(p2))):
+                if length1 == 0 and length2 == 0:
+                    continue
+                for i in range(len(p1) - length1 + 1):
+                    for j in range(len(p2) - length2 + 1):
+                        p1_prime = sub(p1, 0, i) + sub(p2, j, length2) + sub(p1, i + length2)
+                        p2_prime = sub(p2, 0, j) + sub(p1, i, length1) + sub(p2, j + length1)
+                        phonemes_prime = phonemes.copy()
+                        phonemes_prime[i1] = p1_prime
+                        phonemes_prime[i2] = p2_prime
+                        yield (i1, p1_prime), (i2, p2_prime)
 
 
 def get_tag_prob(sentence: str) -> float:
@@ -94,12 +97,14 @@ def get_prob(sentence: str) -> float:
     return get_tag_prob(sentence) * get_dep_prob(sentence)
 
 
-def is_valid(old, new, i1: int, i2: int) -> bool:
+def is_valid(old, new, i1: int, i2: int) -> (bool, bool):
     m, n = old[i1], old[i2]
     m_new, n_new = new[i1], new[i2]
     gram_m = get_tags(m).intersection(get_tags(m_new))
     gram_n = get_tags(n).intersection(get_tags(n_new))
-    return len(gram_m) > 0 and len(gram_n) > 0
+    old_tags = [t.tag_ for t in nlp(' '.join(old))]
+    new_tags = [t.tag_ for t in nlp(' '.join(new))]
+    return len(gram_m) > 0 and len(gram_n) > 0, old_tags == new_tags
 
 
 def search(sentence: str):
@@ -116,19 +121,32 @@ def search(sentence: str):
                 new_words = words.copy()
                 new_words[i1] = m_prime
                 new_words[i2] = n_prime
-                new_sentence = ' '.join(new_words)
-                if is_valid(words, new_words, i1, i2):
-                    yield new_sentence, get_prob(new_sentence)
+                b1, b2 = is_valid(words, new_words, i1, i2)
+                if b1 or b2:
+                    new_sentence = ' '.join(new_words)
+                    yield new_sentence, get_prob(new_sentence), b1, b2
 
 
 if __name__ == '__main__':
     nlp = spacy.load(SPACY_FILE)
-    print(f"Loaded language package ({len(nlp.vocab)} words)")
+    print(f"Loaded SpaCy language package {SPACY_FILE}")
     setup()
     for sentence in sys.argv[1:]:
         print(sentence)
 
         out = list(set(search(sentence)))  # Remove duplicates
-        out.sort(key=lambda t: t[1], reverse=True)
+
+
+        def cmp(tup1, tup2) -> int:
+            n1 = [tup1[2], tup1[3]].count(True)
+            n2 = [tup2[2], tup2[3]].count(True)
+            if n1 != n2:
+                return n2 - n1
+            else:
+                prob1, prob2 = tup1[1], tup2[1]
+                return prob2 - prob1
+
+
+        out.sort(key=functools.cmp_to_key(cmp))
         for o in out:
-            print(f"{o[0]}\t\t{o[1]}")
+            print(f"{o[0]}\t\t{o[1]}\t{'L' if o[2] else ' '}{'S' if o[3] else ' '}")

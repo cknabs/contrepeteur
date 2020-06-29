@@ -18,7 +18,7 @@ def get_word_freq(word, info):
 
 
 def get_phoneme(word: str) -> str:
-    return word_phoneme[word]
+    return word_phoneme[word.lower()]
 
 
 def phoneme2words(phoneme: str) -> Set[str]:
