@@ -1,35 +1,40 @@
 import csv
+from collections import defaultdict
 from itertools import product
+from typing import Set
 
 LEXIQUE_FILE = 'Lexique/Lexique383.tsv'
 SPACY_FILE = 'fr_core_news_sm'
 
-LEXIQUE = {}
-INV = {}
-G = {}
-WORD_FREQ = {}
+word_phoneme = defaultdict(str)
+phoneme_words = defaultdict(set)
+word_tags = defaultdict(set)
+word_freq = defaultdict(float)
 
 
 # Getters
 def get_word_freq(word, info):
-    return WORD_FREQ[word + ':' + info]
+    return word_freq[word + ':' + info]
 
 
-def get_phoneme(word):
-    return LEXIQUE[word] if word in LEXIQUE else ''
+def get_phoneme(word: str) -> str:
+    return word_phoneme[word]
 
 
-def phoneme2word(phoneme):
-    return INV[phoneme]
+def phoneme2words(phoneme: str) -> Set[str]:
+    return phoneme_words[phoneme]
+
+
+def get_tags(word: str) -> Set[str]:
+    return word_tags[word]
 
 
 # Helpers for setup
-
-def get_tags(row):
+def read_tags(row: dict):
     gram = row['cgram']
     if gram == 'VER':
         infoverbe = row['infover']
-        return ['VER_' + iv for iv in infoverbe.split(';')]
+        return ['VER_' + iv for iv in infoverbe.split(';')[:-1]]
     else:
         genre = row['genre']
         nombre = row['nombre']
@@ -38,7 +43,7 @@ def get_tags(row):
         return [gram + '_' + g + n for g, n in product(genres, nombres)]
 
 
-def get_freq(row):
+def read_freq(row):
     f1 = float(row['freqlemfilms2']) / 1000000
     f2 = float(row['freqlemlivres']) / 1000000
     return 0.5 * (f1 + f2)
@@ -51,18 +56,18 @@ def setup(lexique_file=LEXIQUE_FILE):
         for row in tsv_in:
             word = row['ortho']
             phon = row['phon']
-            freq = get_freq(row)
+            freq = read_freq(row)
 
-            LEXIQUE[word] = phon
-            if phon not in INV:
-                INV[phon] = set()
-            INV[phon].add(word)
+            word_phoneme[word] = phon
+            if phon not in phoneme_words:
+                phoneme_words[phon] = set()
+            phoneme_words[phon].add(word)
 
-            if word not in G:
-                G[word] = set()
-            G[word].update(get_tags(row))
+            if word not in word_tags:
+                word_tags[word] = set()
+            word_tags[word].update(read_tags(row))
 
-            for o in get_tags(row):
-                WORD_FREQ[word + ':' + o] = freq
-    print(f"{len(LEXIQUE)} orthographes chargées")
+            for o in read_tags(row):
+                word_freq[word + ':' + o] = freq
+    print(f"{len(word_phoneme)} orthographes chargées")
     print("=" * 50)

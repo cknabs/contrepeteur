@@ -9,7 +9,7 @@ from spacy.language import Language
 from spacy.pipeline import Tagger
 from spacy.tokens import Doc, Token
 
-from setup import *
+from setup import get_phoneme, get_tags, phoneme2words, SPACY_FILE, setup
 
 
 # Helper
@@ -24,16 +24,8 @@ def sub(lst: List, start: int, length=None) -> List:
 
 DEBUG = False
 
-
-def is_match(m, m_prime, cat_m):
-    if DEBUG:
-        print(f"\t{m} ~> {m_prime}\t{cat_m}")
-    return True
-
-
 # Searching
 
-# Doc.set_extension('phonemes', default=None)
 Token.set_extension('phoneme', getter=lambda t: get_phoneme(t.text))
 
 Doc.set_extension('tag_scores', default=None)
@@ -98,46 +90,35 @@ def get_dep_prob(sentence: str) -> float:
     return scores.prod()
 
 
-def get_prob(sentence: str):
+def get_prob(sentence: str) -> float:
     return get_tag_prob(sentence) * get_dep_prob(sentence)
 
 
-def search(sentence):
-    doc = nlp(sentence)
-    # for token in doc:
-    #     print(token.text, token.lemma_, token.pos_, token.tag_, token.dep_,
-    #     token.shape_, token.is_alpha, token.is_stop, token._.phoneme)
+def is_valid(old, new, i1: int, i2: int) -> bool:
+    m, n = old[i1], old[i2]
+    m_new, n_new = new[i1], new[i2]
+    gram_m = get_tags(m).intersection(get_tags(m_new))
+    gram_n = get_tags(n).intersection(get_tags(n_new))
+    return len(gram_m) > 0 and len(gram_n) > 0
 
-    # phonemes = doc._.phonemes
+
+def search(sentence: str):
+    doc = nlp(sentence)
+
     phonemes = [t._.phoneme for t in doc]
     words = [t.text for t in doc]
 
     for (i1, p1_prime), (i2, p2_prime) in get_permutations(phonemes):
-        if p1_prime not in INV or p2_prime not in INV:
-            continue
+        p1, p2 = phonemes[i1], phonemes[i2]
 
-        p1 = phonemes[i1]
-        p2 = phonemes[i2]
-        m = words[i1]
-        n = words[i2]
-
-        for m_prime in [x for x in INV[p1_prime] if LEXIQUE[x] != p1]:
-            for n_prime in [x for x in INV[p2_prime] if LEXIQUE[x] != p2]:
-
-                gram_m = G[m].intersection(G[m_prime])
-                gram_n = G[n].intersection(G[n_prime])
-                for cat_m in gram_m:
-                    for cat_n in gram_n:
-                        c_m = is_match(m, m_prime, cat_m)
-                        c_n = is_match(n, n_prime, cat_n)
-                        if c_m and c_n:
-                            new_words = words.copy()
-                            new_words[words.index(m)] = m_prime
-                            new_words[words.index(n)] = n_prime
-                            new_sentence = ' '.join(new_words)
-                            yield new_sentence, get_prob(new_sentence)
-                        else:
-                            pass
+        for m_prime in [x for x in phoneme2words(p1_prime) if get_phoneme(x) != p1]:
+            for n_prime in [x for x in phoneme2words(p2_prime) if get_phoneme(x) != p2]:
+                new_words = words.copy()
+                new_words[i1] = m_prime
+                new_words[i2] = n_prime
+                new_sentence = ' '.join(new_words)
+                if is_valid(words, new_words, i1, i2):
+                    yield new_sentence, get_prob(new_sentence)
 
 
 if __name__ == '__main__':
