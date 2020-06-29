@@ -1,4 +1,5 @@
 import sys
+from collections import defaultdict
 from itertools import combinations
 from typing import List
 
@@ -75,10 +76,30 @@ def get_permutations(phonemes: List[str]) -> List[str]:
                     yield (i1, p1_prime), (i2, p2_prime)
 
 
-def get_log_prob(sentence: str) -> float:
+def get_tag_prob(sentence: str) -> float:
     doc = nlp(sentence)
     scores = doc._.tag_scores
     return scores.max(axis=1).prod()
+
+
+def get_dep_prob(sentence: str) -> float:
+    # Parse sentence using beam search to get probabilities
+    with nlp.disable_pipes('parser'):
+        beam_doc = nlp(sentence)
+    dep_scores = defaultdict(float)
+    beams = nlp.parser.beam_parse([beam_doc], beam_width=16, beam_density=0.0001)
+    for beam in beams:
+        for score, deps in nlp.parser.moves.get_beam_parses(beam):
+            for head, elem, label in deps:
+                dep_scores[(head, elem, label)] += score
+    # Compare probabilities to output
+    doc = nlp(sentence)
+    scores = np.array([dep_scores[t.head.i, t.i, t.dep_] for t in doc])
+    return scores.prod()
+
+
+def get_prob(sentence: str):
+    return get_tag_prob(sentence) * get_dep_prob(sentence)
 
 
 def search(sentence):
@@ -113,9 +134,8 @@ def search(sentence):
                             new_words = words.copy()
                             new_words[words.index(m)] = m_prime
                             new_words[words.index(n)] = n_prime
-                            freq = 0.5 * (get_word_freq(m_prime, cat_m) + get_word_freq(n_prime, cat_n))
                             new_sentence = ' '.join(new_words)
-                            yield new_sentence, get_log_prob(new_sentence)
+                            yield new_sentence, get_prob(new_sentence)
                         else:
                             pass
 
@@ -127,7 +147,7 @@ if __name__ == '__main__':
     for sentence in sys.argv[1:]:
         print(sentence)
 
-        out = list(set(search(sentence)))  # Remove duplicates (should only be necessary with current implementation)
+        out = list(set(search(sentence)))  # Remove duplicates
         out.sort(key=lambda t: t[1], reverse=True)
         for o in out:
             print(f"{o[0]}\t\t{o[1]}")
